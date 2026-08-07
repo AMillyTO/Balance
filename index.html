@@ -89,6 +89,17 @@
     font-family:'JetBrains Mono',monospace; font-size:12px; letter-spacing:.1em; text-transform:uppercase; border-radius:2px; cursor:pointer;}
   .mark-done.is-done{background:var(--ok); color:var(--canvas);}
 
+  /* TIMER */
+  .timer-box{display:flex; align-items:center; gap:12px; margin:4px 0 14px; padding:12px; background:var(--canvas); border:1px solid var(--line); border-radius:2px;}
+  .timer-display{font-family:'JetBrains Mono',monospace; font-size:26px; font-weight:700; color:var(--rope); min-width:78px; letter-spacing:.02em;}
+  .timer-display.running{color:var(--gold);}
+  .timer-display.done{color:var(--ok);}
+  .timer-btns{display:flex; gap:8px; flex:1;}
+  .timer-btn{flex:1; padding:9px 6px; background:var(--canvas2); border:1px solid var(--line); color:var(--rope);
+    font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:.06em; text-transform:uppercase; border-radius:2px; cursor:pointer; text-align:center;}
+  .timer-btn.start{border-color:var(--gold); color:var(--gold);}
+  .timer-btn.pause{border-color:var(--corner-red); color:var(--corner-red);}
+
   footer{padding:24px 20px 0; text-align:center;}
   .reset-btn{background:none; border:none; color:var(--line); font-family:'JetBrains Mono',monospace; font-size:11px; text-decoration:underline; cursor:pointer; padding:10px;}
 
@@ -103,7 +114,7 @@
   <header>
     <div class="eyebrow"><span>SECRETS OF A CHAMPION BALANCE</span><span>T. WITTMAN</span></div>
     <h1>DAILY<br><span>FOOTWORK</span></h1>
-    <div class="sub">8 rungs · 31 drills · your own progression card</div>
+    <div class="sub">9 rungs · 31 drills · your own progression card</div>
   </header>
 
   <div class="modes">
@@ -206,6 +217,88 @@ const TOTAL_MIN_DAILY = 15;
 
 let mode = 'full';
 let state = null;
+let openRungs = new Set();
+let timers = {}; // ri -> { remaining, running, intervalId }
+
+function parseTimeToSec(str){
+  if(!str || str==='—') return 60;
+  const m = str.match(/(\d+)/);
+  return m ? parseInt(m[1],10)*60 : 60;
+}
+
+function formatTime(sec){
+  sec = Math.max(0, sec);
+  const m = Math.floor(sec/60);
+  const s = sec%60;
+  return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+}
+
+function getTimerSeconds(ri){
+  if(!timers[ri]){
+    const rung = DATA[ri];
+    const timeStr = mode==='daily' ? rung.dailyTime : rung.time;
+    timers[ri] = { remaining: parseTimeToSec(timeStr), running:false, intervalId:null };
+  }
+  return timers[ri].remaining;
+}
+
+function updateTimerUI(ri){
+  const disp = document.getElementById('timerDisplay-'+ri);
+  const btn = document.getElementById('timerStart-'+ri);
+  if(!disp || !btn) return;
+  const t = timers[ri];
+  disp.textContent = formatTime(t.remaining);
+  disp.classList.toggle('running', t.running);
+  disp.classList.toggle('done', t.remaining<=0);
+  btn.textContent = t.running ? 'Pause' : (t.remaining<=0 ? 'Restart' : 'Start');
+  btn.classList.toggle('pause', t.running);
+  btn.classList.toggle('start', !t.running);
+}
+
+function startTimer(ri){
+  getTimerSeconds(ri); // ensure initialized
+  const t = timers[ri];
+  if(t.running){
+    clearInterval(t.intervalId);
+    t.running = false;
+    updateTimerUI(ri);
+    return;
+  }
+  if(t.remaining<=0){
+    const rung = DATA[ri];
+    const timeStr = mode==='daily' ? rung.dailyTime : rung.time;
+    t.remaining = parseTimeToSec(timeStr);
+  }
+  t.running = true;
+  updateTimerUI(ri);
+  t.intervalId = setInterval(()=>{
+    t.remaining--;
+    if(t.remaining<=0){
+      t.remaining = 0;
+      t.running = false;
+      clearInterval(t.intervalId);
+      if(navigator.vibrate) navigator.vibrate([200,100,200]);
+      showToast('Rung time up 👊');
+    }
+    updateTimerUI(ri);
+  }, 1000);
+}
+
+function resetTimer(ri){
+  const t = timers[ri];
+  if(t && t.intervalId) clearInterval(t.intervalId);
+  const rung = DATA[ri];
+  const timeStr = mode==='daily' ? rung.dailyTime : rung.time;
+  timers[ri] = { remaining: parseTimeToSec(timeStr), running:false, intervalId:null };
+  updateTimerUI(ri);
+}
+
+function clearAllTimers(){
+  Object.keys(timers).forEach(ri=>{
+    if(timers[ri].intervalId) clearInterval(timers[ri].intervalId);
+  });
+  timers = {};
+}
 
 async function loadState(){
   try{
@@ -224,6 +317,7 @@ function todayStr(){ return new Date().toISOString().slice(0,10); }
 
 function setMode(m){
   mode = m;
+  clearAllTimers();
   document.getElementById('modeFull').classList.toggle('active', m==='full');
   document.getElementById('modeDaily').classList.toggle('active', m==='daily');
   render();
@@ -238,7 +332,8 @@ function toggleDrill(ri, di){
 
 function toggleRung(ri){
   const el = document.getElementById('rung-'+ri);
-  el.classList.toggle('open');
+  if(openRungs.has(ri)){ openRungs.delete(ri); el.classList.remove('open'); }
+  else { openRungs.add(ri); el.classList.add('open'); }
 }
 
 async function markDone(ri){
@@ -331,7 +426,7 @@ function render(){
     if(done) doneRungs++;
 
     const rungEl = document.createElement('div');
-    rungEl.className = 'rung' + (done ? ' done':'');
+    rungEl.className = 'rung' + (done ? ' done':'') + (openRungs.has(ri) ? ' open':'');
     rungEl.id = 'rung-'+ri;
 
     const timeShown = mode==='daily' ? rung.dailyTime : rung.time;
@@ -349,6 +444,13 @@ function render(){
       <div class="rung-body">
         <div class="rung-inner">
           <div class="cue">${rung.cue}</div>
+          <div class="timer-box">
+            <div class="timer-display" id="timerDisplay-${ri}">${formatTime(getTimerSeconds(ri))}</div>
+            <div class="timer-btns">
+              <div class="timer-btn start" id="timerStart-${ri}" onclick="startTimer(${ri})">Start</div>
+              <div class="timer-btn" onclick="resetTimer(${ri})">Reset</div>
+            </div>
+          </div>
           ${drills.map((d,di)=>{
             const origIdx = rung.drills.indexOf(d);
             const checked = !!state.checks[mode+'-'+ri+'-'+origIdx];
@@ -368,6 +470,8 @@ function render(){
   document.getElementById('railFill').style.width = (doneRungs/totalRungsShown*100)+'%';
   document.getElementById('railText').textContent = `${doneRungs} of ${totalRungsShown} rungs done`;
   document.getElementById('railTime').textContent = mode==='daily' ? `~${TOTAL_MIN_DAILY} min today` : `~${TOTAL_MIN_FULL} min today`;
+
+  openRungs.forEach(ri=>{ if(timers[ri]) updateTimerUI(ri); });
 }
 
 (async function init(){
